@@ -1,857 +1,818 @@
 ![image](https://user-images.githubusercontent.com/487999/79708354-29074a80-82fa-11ea-80df-0db3962fb453.png)
 
-# 예제 - 음식배달
-
-본 예제는 MSA/DDD/Event Storming/EDA 를 포괄하는 분석/설계/구현/운영 전단계를 커버하도록 구성한 예제입니다.
-이는 클라우드 네이티브 애플리케이션의 개발에 요구되는 체크포인트들을 통과하기 위한 예시 답안을 포함합니다.
-- 체크포인트 : https://workflowy.com/s/assessment-check-po/T5YrzcMewfo4J6LW
-
+# Nocode AI 플랫폼 구축
 
 # Table of contents
 
-- [예제 - 음식배달](#---)
-  - [서비스 시나리오](#서비스-시나리오)
-  - [체크포인트](#체크포인트)
-  - [분석/설계](#분석설계)
-  - [구현:](#구현-)
-    - [DDD 의 적용](#ddd-의-적용)
-    - [폴리글랏 퍼시스턴스](#폴리글랏-퍼시스턴스)
-    - [폴리글랏 프로그래밍](#폴리글랏-프로그래밍)
-    - [동기식 호출 과 Fallback 처리](#동기식-호출-과-Fallback-처리)
-    - [비동기식 호출 과 Eventual Consistency](#비동기식-호출-과-Eventual-Consistency)
-  - [운영](#운영)
-    - [CI/CD 설정](#cicd설정)
-    - [동기식 호출 / 서킷 브레이킹 / 장애격리](#동기식-호출-서킷-브레이킹-장애격리)
-    - [오토스케일 아웃](#오토스케일-아웃)
-    - [무정지 재배포](#무정지-재배포)
-  - [신규 개발 조직의 추가](#신규-개발-조직의-추가)
+- [Nocode AI 플랫폼 MSA 구현](#---)
+  - [클라우드 아키텍처 설계](#클라우드-아키텍처-설계)
+    - [클라우드 아키텍처 구성](#클라우드-아키텍처-구성)
+    - [MSA 아키텍처 구성](#MSA-아키텍처-구성도)
+  - [서비스 분리/설계 역량](#서비스-분리/설계-역량)
+    - [도메인분석 이벤트스토밍](#도메인분석-이벤트스토밍)
+  - [MSA 개발](#MSA-개발)
+    - [분산트랜잭션 SAGA](#분산트랜잭션-SAGA)
+    - [보상처리 Compensation](#보상처리-Compensation)
+    - [단일진입점 Gateway](#단일진입점-Gateway)
+    - [분산 데이터 프로젝션 CQRS](#분산-데이터-프로젝션-CQRS)
+  - [클라우드 배포 역량](#클라우드-배포-역량)
+    - [Container 운영](#Container-운영)
+  - [컨테이너 인프라 설계 및 구성 역량](#컨테이너-인프라-설계-및-구성-역량)
+    - [컨테이너 자동확장 HPA](#컨테이너-자동확장-HPA)
+    - [컨테이너로부터 환경 분리 ConfigMap/Secret](#컨테이너로부터-환경-분리-ConfigMap/Secret)
+    - [클라우드스토리지 활용 PVC](#클라우드스토리지-활용-PVC)
+    - [셀프 힐링/무정지배포 Liveness/Rediness Probe](#셀프-힐링/무정지배포-Liveness/Rediness-Probe)
+    - [서비스 매쉬 응용 Mesh](서비스-매쉬-응용-Mesh)
+    - [통합 모니터링 Loggregation/Monitoring](통합-모니터링-Loggregation/Monitoring)
 
-# 서비스 시나리오
-
-배달의 민족 커버하기 - https://1sung.tistory.com/106
+# 클라우드 아키텍처 설계
 
 기능적 요구사항
-1. 고객이 메뉴를 선택하여 주문한다
-1. 고객이 결제한다
-1. 주문이 되면 주문 내역이 입점상점주인에게 전달된다
-1. 상점주인이 확인하여 요리해서 배달 출발한다
-1. 고객이 주문을 취소할 수 있다
-1. 주문이 취소되면 배달이 취소된다
-1. 고객이 주문상태를 중간중간 조회한다
-1. 주문상태가 바뀔 때 마다 카톡으로 알림을 보낸다
+
+1. 사용자 접속 권한에 따른 메뉴 노출을 제어해야함
+1. 사용자 권한 관리 기능이 필요함
+1. 모델생성 요청에대한 승인기능이 필요함
+1. Vertica(외부) 배치 연동
+1. 모델 작업 관리를 위한 Queue 제공
+1. 타겟추출 및 모델생성 요청 상태 변경시스윙챗 알림 서비스 제공
+1. 학습/생성을 요청한 모델의 요건정보 및 모델학습 수행 단계에 대한 상태정보 연동
+1. 타겟추출 요청 접수
+1. 모델생성 요청 접수
+1. 타겟추출이 완료되면 MIDAS(외부)으로 LMS 대량전송 요청
+1. 생성 요청은 관리자에 의해 반려 가능
+1. 모델생성이 완료되면 타겟추출할 수 있음
+1. 모델생성 진행중 작업 요청을 취소 할 수 있음
 
 비기능적 요구사항
-1. 트랜잭션
-    1. 결제가 되지 않은 주문건은 아예 거래가 성립되지 않아야 한다  Sync 호출 
-1. 장애격리
-    1. 상점관리 기능이 수행되지 않더라도 주문은 365일 24시간 받을 수 있어야 한다  Async (event-driven), Eventual Consistency
-    1. 결제시스템이 과중되면 사용자를 잠시동안 받지 않고 결제를 잠시후에 하도록 유도한다  Circuit breaker, fallback
-1. 성능
-    1. 고객이 자주 상점관리에서 확인할 수 있는 배달상태를 주문시스템(프론트엔드)에서 확인할 수 있어야 한다  CQRS
-    1. 배달상태가 바뀔때마다 카톡 등으로 알림을 줄 수 있어야 한다  Event driven
 
+1. 모델생성이 장애가 나더리도 타겟추출 요청은 계속 받아야한다. Async (event-driven)
+1. 요청한내역의 상태를 CQRS
+1. 생성 요청 상태가 바뀔때마다 스윙챗(사내메신저) 등으로 알림을 줄 수 있어야 한다 Event driven
 
-# 체크포인트
+## 클라우드 아키텍처 구성
 
-- 분석 설계
+![image](https://github.com/grapefr/CloudNativeReport/assets/68136339/f85ca529-dc90-48cb-b6d9-a0ebb0e29e7d)
 
+## MSA 아키텍처 구성도
 
-  - 이벤트스토밍: 
-    - 스티커 색상별 객체의 의미를 제대로 이해하여 헥사고날 아키텍처와의 연계 설계에 적절히 반영하고 있는가?
-    - 각 도메인 이벤트가 의미있는 수준으로 정의되었는가?
-    - 어그리게잇: Command와 Event 들을 ACID 트랜잭션 단위의 Aggregate 로 제대로 묶었는가?
-    - 기능적 요구사항과 비기능적 요구사항을 누락 없이 반영하였는가?    
+![image](https://github.com/grapefr/CloudNativeReport/assets/68136339/3351aa9f-bf48-4cf8-957e-020614b15251)
 
-  - 서브 도메인, 바운디드 컨텍스트 분리
-    - 팀별 KPI 와 관심사, 상이한 배포주기 등에 따른  Sub-domain 이나 Bounded Context 를 적절히 분리하였고 그 분리 기준의 합리성이 충분히 설명되는가?
-      - 적어도 3개 이상 서비스 분리
-    - 폴리글랏 설계: 각 마이크로 서비스들의 구현 목표와 기능 특성에 따른 각자의 기술 Stack 과 저장소 구조를 다양하게 채택하여 설계하였는가?
-    - 서비스 시나리오 중 ACID 트랜잭션이 크리티컬한 Use 케이스에 대하여 무리하게 서비스가 과다하게 조밀히 분리되지 않았는가?
-  - 컨텍스트 매핑 / 이벤트 드리븐 아키텍처 
-    - 업무 중요성과  도메인간 서열을 구분할 수 있는가? (Core, Supporting, General Domain)
-    - Request-Response 방식과 이벤트 드리븐 방식을 구분하여 설계할 수 있는가?
-    - 장애격리: 서포팅 서비스를 제거 하여도 기존 서비스에 영향이 없도록 설계하였는가?
-    - 신규 서비스를 추가 하였을때 기존 서비스의 데이터베이스에 영향이 없도록 설계(열려있는 아키택처)할 수 있는가?
-    - 이벤트와 폴리시를 연결하기 위한 Correlation-key 연결을 제대로 설계하였는가?
+# 서비스 분리/설계 역량
 
-  - 헥사고날 아키텍처
-    - 설계 결과에 따른 헥사고날 아키텍처 다이어그램을 제대로 그렸는가?
-    
-- 구현
-  - [DDD] 분석단계에서의 스티커별 색상과 헥사고날 아키텍처에 따라 구현체가 매핑되게 개발되었는가?
-    - Entity Pattern 과 Repository Pattern 을 적용하여 JPA 를 통하여 데이터 접근 어댑터를 개발하였는가
-    - [헥사고날 아키텍처] REST Inbound adaptor 이외에 gRPC 등의 Inbound Adaptor 를 추가함에 있어서 도메인 모델의 손상을 주지 않고 새로운 프로토콜에 기존 구현체를 적응시킬 수 있는가?
-    - 분석단계에서의 유비쿼터스 랭귀지 (업무현장에서 쓰는 용어) 를 사용하여 소스코드가 서술되었는가?
-  - Request-Response 방식의 서비스 중심 아키텍처 구현
-    - 마이크로 서비스간 Request-Response 호출에 있어 대상 서비스를 어떠한 방식으로 찾아서 호출 하였는가? (Service Discovery, REST, FeignClient)
-    - 서킷브레이커를 통하여  장애를 격리시킬 수 있는가?
-  - 이벤트 드리븐 아키텍처의 구현
-    - 카프카를 이용하여 PubSub 으로 하나 이상의 서비스가 연동되었는가?
-    - Correlation-key:  각 이벤트 건 (메시지)가 어떠한 폴리시를 처리할때 어떤 건에 연결된 처리건인지를 구별하기 위한 Correlation-key 연결을 제대로 구현 하였는가?
-    - Message Consumer 마이크로서비스가 장애상황에서 수신받지 못했던 기존 이벤트들을 다시 수신받아 처리하는가?
-    - Scaling-out: Message Consumer 마이크로서비스의 Replica 를 추가했을때 중복없이 이벤트를 수신할 수 있는가
-    - CQRS: Materialized View 를 구현하여, 타 마이크로서비스의 데이터 원본에 접근없이(Composite 서비스나 조인SQL 등 없이) 도 내 서비스의 화면 구성과 잦은 조회가 가능한가?
-
-  - 폴리글랏 플로그래밍
-    - 각 마이크로 서비스들이 하나이상의 각자의 기술 Stack 으로 구성되었는가?
-    - 각 마이크로 서비스들이 각자의 저장소 구조를 자율적으로 채택하고 각자의 저장소 유형 (RDB, NoSQL, File System 등)을 선택하여 구현하였는가?
-  - API 게이트웨이
-    - API GW를 통하여 마이크로 서비스들의 집입점을 통일할 수 있는가?
-    - 게이트웨이와 인증서버(OAuth), JWT 토큰 인증을 통하여 마이크로서비스들을 보호할 수 있는가?
-- 운영
-  - SLA 준수
-    - 셀프힐링: Liveness Probe 를 통하여 어떠한 서비스의 health 상태가 지속적으로 저하됨에 따라 어떠한 임계치에서 pod 가 재생되는 것을 증명할 수 있는가?
-    - 서킷브레이커, 레이트리밋 등을 통한 장애격리와 성능효율을 높힐 수 있는가?
-    - 오토스케일러 (HPA) 를 설정하여 확장적 운영이 가능한가?
-    - 모니터링, 앨럿팅: 
-  - 무정지 운영 CI/CD (10)
-    - Readiness Probe 의 설정과 Rolling update을 통하여 신규 버전이 완전히 서비스를 받을 수 있는 상태일때 신규버전의 서비스로 전환됨을 siege 등으로 증명 
-    - Contract Test :  자동화된 경계 테스트를 통하여 구현 오류나 API 계약위반를 미리 차단 가능한가?
-
-
-# 분석/설계
-
-
-## AS-IS 조직 (Horizontally-Aligned)
-  ![image](https://user-images.githubusercontent.com/487999/79684144-2a893200-826a-11ea-9a01-79927d3a0107.png)
-
-## TO-BE 조직 (Vertically-Aligned)
-  ![image](https://user-images.githubusercontent.com/487999/79684159-3543c700-826a-11ea-8d5f-a3fc0c4cad87.png)
-
-
-## Event Storming 결과
-* MSAEz 로 모델링한 이벤트스토밍 결과:  http://msaez.io/#/storming/nZJ2QhwVc4NlVJPbtTkZ8x9jclF2/every/a77281d704710b0c2e6a823b6e6d973a/-M5AV2z--su_i4BfQfeF
-
+## 도메인분석 이벤트스토밍
 
 ### 이벤트 도출
-![image](https://user-images.githubusercontent.com/487999/79683604-47bc0180-8266-11ea-9212-7e88c9bf9911.png)
+
+![image](https://github.com/grapefr/CloudNativeReport/assets/68136339/8587f5ba-9b0d-4a0b-b6c5-8f1fd69c3013)
+
+    - 요구사항에 맞추어 필요한 이벤트들을 나열
 
 ### 부적격 이벤트 탈락
-![image](https://user-images.githubusercontent.com/487999/79683612-4b4f8880-8266-11ea-9519-7e084524a462.png)
+
+![image](https://github.com/grapefr/CloudNativeReport/assets/68136339/4cb42283-dff3-4731-b24e-27f411b20eb8)
 
     - 과정중 도출된 잘못된 도메인 이벤트들을 걸러내는 작업을 수행함
-        - 주문시>메뉴카테고리선택됨, 주문시>메뉴검색됨 :  UI 의 이벤트이지, 업무적인 의미의 이벤트가 아니라서 제외
+      요구사항중 로그인했을때 뿌려주는 메뉴리스트는 Common 성격으로 제외함
 
-### 액터, 커맨드 부착하여 읽기 좋게
-![image](https://user-images.githubusercontent.com/487999/79683614-4ee30f80-8266-11ea-9a50-68cdff2dcc46.png)
+### 액터, 커맨드 추가
+
+![finalProject-2024-02-21 01 04 27 (3)](https://github.com/grapefr/CloudNativeReport/assets/68136339/0bdf91f4-aa94-4105-96cd-953953ed3dc8)
 
 ### 어그리게잇으로 묶기
-![image](https://user-images.githubusercontent.com/487999/79683618-52769680-8266-11ea-9c21-48d6812444ba.png)
 
-    - app의 Order, store 의 주문처리, 결제의 결제이력은 그와 연결된 command 와 event 들에 의하여 트랜잭션이 유지되어야 하는 단위로 그들 끼리 묶어줌
+![finalProject-2024-02-21 01 04 28](https://github.com/grapefr/CloudNativeReport/assets/68136339/9776acb3-09b2-42f2-82c8-1bb9bdd52164)
 
-### 바운디드 컨텍스트로 묶기
+    - Model 생성 요청, Target 추출 요청 프로세스 분리하며, 공통영역을 후속 프로세스를 나눔.
 
-![image](https://user-images.githubusercontent.com/487999/79683625-560a1d80-8266-11ea-9790-40d68a36d95d.png)
+### 폴리시 부착
 
-    - 도메인 서열 분리 
-        - Core Domain:  app(front), store : 없어서는 안될 핵심 서비스이며, 연견 Up-time SLA 수준을 99.999% 목표, 배포주기는 app 의 경우 1주일 1회 미만, store 의 경우 1개월 1회 미만
-        - Supporting Domain:   marketing, customer : 경쟁력을 내기위한 서비스이며, SLA 수준은 연간 60% 이상 uptime 목표, 배포주기는 각 팀의 자율이나 표준 스프린트 주기가 1주일 이므로 1주일 1회 이상을 기준으로 함.
-        - General Domain:   pay : 결제서비스로 3rd Party 외부 서비스를 사용하는 것이 경쟁력이 높음 (핑크색으로 이후 전환할 예정)
-
-### 폴리시 부착 (괄호는 수행주체, 폴리시 부착을 둘째단계에서 해놔도 상관 없음. 전체 연계가 초기에 드러남)
-
-![image](https://user-images.githubusercontent.com/487999/79683633-5aced180-8266-11ea-8f42-c769eb88dfb1.png)
+![finalProject-2024-02-21 01 04 28 (2)](https://github.com/grapefr/CloudNativeReport/assets/68136339/bc444f22-d265-444a-9f9c-4dd72065293a)
 
 ### 폴리시의 이동과 컨텍스트 매핑 (점선은 Pub/Sub, 실선은 Req/Resp)
 
-![image](https://user-images.githubusercontent.com/487999/79683641-5f938580-8266-11ea-9fdb-4e80ff6642fe.png)
+![finalProject-2024-02-21 01 04 28 (3)](https://github.com/grapefr/CloudNativeReport/assets/68136339/0de7e20d-b6fe-4e56-9bc2-5ac621ff31cf)
 
-### 완성된 1차 모형
+### 완성된 모형
 
-![image](https://user-images.githubusercontent.com/487999/79683646-63bfa300-8266-11ea-9bc5-c0b650507ac8.png)
+![image](https://github.com/grapefr/CloudNativeReport/assets/68136339/f8d3f13d-6fa9-4e38-882a-c6e59c6198b9)
 
     - View Model 추가
 
-### 1차 완성본에 대한 기능적/비기능적 요구사항을 커버하는지 검증
+# MSA 개발
 
-![image](https://user-images.githubusercontent.com/487999/79684167-3ecd2f00-826a-11ea-806a-957362d197e3.png)
-
-    - 고객이 메뉴를 선택하여 주문한다 (ok)
-    - 고객이 결제한다 (ok)
-    - 주문이 되면 주문 내역이 입점상점주인에게 전달된다 (ok)
-    - 상점주인이 확인하여 요리해서 배달 출발한다 (ok)
-
-![image](https://user-images.githubusercontent.com/487999/79684170-47256a00-826a-11ea-9777-e16fafff519a.png)
-    - 고객이 주문을 취소할 수 있다 (ok)
-    - 주문이 취소되면 배달이 취소된다 (ok)
-    - 고객이 주문상태를 중간중간 조회한다 (View-green sticker 의 추가로 ok) 
-    - 주문상태가 바뀔 때 마다 카톡으로 알림을 보낸다 (?)
-
-
-### 모델 수정
-
-![image](https://user-images.githubusercontent.com/487999/79684176-4e4c7800-826a-11ea-8deb-b7b053e5d7c6.png)
-    
-    - 수정된 모델은 모든 요구사항을 커버함.
-
-### 비기능 요구사항에 대한 검증
-
-![image](https://user-images.githubusercontent.com/487999/79684184-5c9a9400-826a-11ea-8d87-2ed1e44f4562.png)
-
-    - 마이크로 서비스를 넘나드는 시나리오에 대한 트랜잭션 처리
-        - 고객 주문시 결제처리:  결제가 완료되지 않은 주문은 절대 받지 않는다는 경영자의 오랜 신념(?) 에 따라, ACID 트랜잭션 적용. 주문와료시 결제처리에 대해서는 Request-Response 방식 처리
-        - 결제 완료시 점주연결 및 배송처리:  App(front) 에서 Store 마이크로서비스로 주문요청이 전달되는 과정에 있어서 Store 마이크로 서비스가 별도의 배포주기를 가지기 때문에 Eventual Consistency 방식으로 트랜잭션 처리함.
-        - 나머지 모든 inter-microservice 트랜잭션: 주문상태, 배달상태 등 모든 이벤트에 대해 카톡을 처리하는 등, 데이터 일관성의 시점이 크리티컬하지 않은 모든 경우가 대부분이라 판단, Eventual Consistency 를 기본으로 채택함.
-
-
-
-
-## 헥사고날 아키텍처 다이어그램 도출
-    
-![image](https://user-images.githubusercontent.com/487999/79684772-eba9ab00-826e-11ea-9405-17e2bf39ec76.png)
-
-
-    - Chris Richardson, MSA Patterns 참고하여 Inbound adaptor와 Outbound adaptor를 구분함
-    - 호출관계에서 PubSub 과 Req/Resp 를 구분함
-    - 서브 도메인과 바운디드 컨텍스트의 분리:  각 팀의 KPI 별로 아래와 같이 관심 구현 스토리를 나눠가짐
-
-
-# 구현:
-
-분석/설계 단계에서 도출된 헥사고날 아키텍처에 따라, 각 BC별로 대변되는 마이크로 서비스들을 스프링부트와 파이선으로 구현하였다. 구현한 각 서비스를 로컬에서 실행하는 방법은 아래와 같다 (각자의 포트넘버는 8081 ~ 808n 이다)
+## 기능 확인
 
 ```
-cd app
-mvn spring-boot:run
+# 모델 생성 요청
+ http gateway:8080/targets userId=test type=testtype state=request modelRequestId=1
 
-cd pay
-mvn spring-boot:run 
+# 모델 생성 요청 승인
+ http PUT gateway:8080/targets id=1
 
-cd store
-mvn spring-boot:run  
+# 타겟추출 요청
+http gateway:8080/targets userId=test type=testtype state=request modelRequestId=1
+# 타겟추출 승인
+ http PUT gateway:8080/targets id=1
 
-cd customer
-python policy-handler.py 
+# 각 프로세스 승인 처리 진행 후 kafka topic
+{"eventType":"Requested","timestamp":1708532929928,"id":15,"state":"requested","userId":"test","modelName":"TestModel5"}
+{"eventType":"Requested","timestamp":1708532930286,"id":16,"state":"requested","userId":"test","modelName":"TestModel6"}
+{"eventType":"Approved","timestamp":1708532934871,"id":1,"state":"approved","userId":"test","modelName":"TestModel1"}
+{"eventType":"ModelCompleted","timestamp":1708532939665,"id":1,"type":"model","state":"completed","requestId":"1"}
+{"eventType":"TargetCompleted","timestamp":1708502151904,"id":1,"type":"target","state":"targetCompleted","requestId":"11"}
+
+#요청 취소에 대한 이벤트 pub 내역
+{"eventType":"RequestCanceled","timestamp":1708532942744,"id":12,"state":"requestCanceled","userId":"test","modelName":"TestModel2"}
 ```
 
-## DDD 의 적용
+![finalproject2024-02-22 16 41 09](https://github.com/grapefr/CloudNativeReport/assets/68136339/92bd78e7-bd09-4b34-966e-dbef8184db0c)
 
-- 각 서비스내에 도출된 핵심 Aggregate Root 객체를 Entity 로 선언하였다: (예시는 pay 마이크로 서비스). 이때 가능한 현업에서 사용하는 언어 (유비쿼터스 랭귀지)를 그대로 사용하려고 노력했다. 하지만, 일부 구현에 있어서 영문이 아닌 경우는 실행이 불가능한 경우가 있기 때문에 계속 사용할 방법은 아닌것 같다. (Maven pom.xml, Kafka의 topic id, FeignClient 의 서비스 id 등은 한글로 식별자를 사용하는 경우 오류가 발생하는 것을 확인하였다)
+    - 알림 서비스에서의 처리 내역
 
-```
-package fooddelivery;
+## 분산 트랜잭션 SAGA
 
-import javax.persistence.*;
-import org.springframework.beans.BeanUtils;
-import java.util.List;
-
-@Entity
-@Table(name="결제이력_table")
-public class 결제이력 {
-
-    @Id
-    @GeneratedValue(strategy=GenerationType.AUTO)
-    private Long id;
-    private String orderId;
-    private Double 금액;
-
-    public Long getId() {
-        return id;
-    }
-
-    public void setId(Long id) {
-        this.id = id;
-    }
-    public String getOrderId() {
-        return orderId;
-    }
-
-    public void setOrderId(String orderId) {
-        this.orderId = orderId;
-    }
-    public Double get금액() {
-        return 금액;
-    }
-
-    public void set금액(Double 금액) {
-        this.금액 = 금액;
-    }
-
-}
+- 각 서비스내에서 사용할 데이터를 개별적으로 관리하고 이벤트 발행을 통하여 관련 서비스들에게 전파함.
 
 ```
-- Entity Pattern 과 Repository Pattern 을 적용하여 JPA 를 통하여 다양한 데이터소스 유형 (RDB or NoSQL) 에 대한 별도의 처리가 없도록 데이터 접근 어댑터를 자동 생성하기 위하여 Spring Data REST 의 RestRepository 를 적용하였다
-```
-package fooddelivery;
+# 서비스별 테이블 분리
 
-import org.springframework.data.repository.PagingAndSortingRepository;
+gitpod /workspace/CloudNativeProject (main) $ find ./ -name *Repo*.java
+./core/src/main/java/testab/domain/CoreRepository.java
+./model/src/main/java/testab/domain/ModelRepository.java
+./model/src/main/java/testab/infra/MyRequestRepository.java
+./notice/src/main/java/testab/domain/NoticeRepository.java
+./target/src/main/java/testab/domain/TargetRepository.java
+./target/src/main/java/testab/infra/MyRequestRepository.java
 
-public interface 결제이력Repository extends PagingAndSortingRepository<결제이력, Long>{
-}
-```
-- 적용 후 REST API 의 테스트
-```
-# app 서비스의 주문처리
-http localhost:8081/orders item="통닭"
-
-# store 서비스의 배달처리
-http localhost:8083/주문처리s orderId=1
-
-# 주문 상태 확인
-http localhost:8081/orders/1
-
-```
-
-
-## 폴리글랏 퍼시스턴스
-
-앱프런트 (app) 는 서비스 특성상 많은 사용자의 유입과 상품 정보의 다양한 콘텐츠를 저장해야 하는 특징으로 인해 RDB 보다는 Document DB / NoSQL 계열의 데이터베이스인 Mongo DB 를 사용하기로 하였다. 이를 위해 order 의 선언에는 @Entity 가 아닌 @Document 로 마킹되었으며, 별다른 작업없이 기존의 Entity Pattern 과 Repository Pattern 적용과 데이터베이스 제품의 설정 (application.yml) 만으로 MongoDB 에 부착시켰다
-
-```
-# Order.java
-
-package fooddelivery;
-
-@Document
-public class Order {
-
-    private String id; // mongo db 적용시엔 id 는 고정값으로 key가 자동 발급되는 필드기 때문에 @Id 나 @GeneratedValue 를 주지 않아도 된다.
-    private String item;
-    private Integer 수량;
-
-}
-
-
-# 주문Repository.java
-package fooddelivery;
-
-public interface 주문Repository extends JpaRepository<Order, UUID>{
-}
-
-# application.yml
-
-  data:
-    mongodb:
-      host: mongodb.default.svc.cluster.local
-    database: mongo-example
-
-```
-
-## 폴리글랏 프로그래밍
-
-고객관리 서비스(customer)의 시나리오인 주문상태, 배달상태 변경에 따라 고객에게 카톡메시지 보내는 기능의 구현 파트는 해당 팀이 python 을 이용하여 구현하기로 하였다. 해당 파이썬 구현체는 각 이벤트를 수신하여 처리하는 Kafka consumer 로 구현되었고 코드는 다음과 같다:
-```
-from flask import Flask
-from redis import Redis, RedisError
-from kafka import KafkaConsumer
-import os
-import socket
-
-
-# To consume latest messages and auto-commit offsets
-consumer = KafkaConsumer('fooddelivery',
-                         group_id='',
-                         bootstrap_servers=['localhost:9092'])
-for message in consumer:
-    print ("%s:%d:%d: key=%s value=%s" % (message.topic, message.partition,
-                                          message.offset, message.key,
-                                          message.value))
-
-    # 카톡호출 API
-```
-
-파이선 애플리케이션을 컴파일하고 실행하기 위한 도커파일은 아래와 같다 (운영단계에서 할일인가? 아니다 여기 까지가 개발자가 할일이다. Immutable Image):
-```
-FROM python:2.7-slim
-WORKDIR /app
-ADD . /app
-RUN pip install --trusted-host pypi.python.org -r requirements.txt
-ENV NAME World
-EXPOSE 8090
-CMD ["python", "policy-handler.py"]
-```
-
-
-## 동기식 호출 과 Fallback 처리
-
-분석단계에서의 조건 중 하나로 주문(app)->결제(pay) 간의 호출은 동기식 일관성을 유지하는 트랜잭션으로 처리하기로 하였다. 호출 프로토콜은 이미 앞서 Rest Repository 에 의해 노출되어있는 REST 서비스를 FeignClient 를 이용하여 호출하도록 한다. 
-
-- 결제서비스를 호출하기 위하여 Stub과 (FeignClient) 를 이용하여 Service 대행 인터페이스 (Proxy) 를 구현 
-
-```
-# (app) 결제이력Service.java
-
-package fooddelivery.external;
-
-@FeignClient(name="pay", url="http://localhost:8082")//, fallback = 결제이력ServiceFallback.class)
-public interface 결제이력Service {
-
-    @RequestMapping(method= RequestMethod.POST, path="/결제이력s")
-    public void 결제(@RequestBody 결제이력 pay);
-
-}
-```
-
-- 주문을 받은 직후(@PostPersist) 결제를 요청하도록 처리
-```
-# Order.java (Entity)
+# DB create 및 update 시 이벤트 발행
 
     @PostPersist
-    public void onPostPersist(){
-
-        fooddelivery.external.결제이력 pay = new fooddelivery.external.결제이력();
-        pay.setOrderId(getOrderId());
-        
-        Application.applicationContext.getBean(fooddelivery.external.결제이력Service.class)
-                .결제(pay);
-    }
-```
-
-- 동기식 호출에서는 호출 시간에 따른 타임 커플링이 발생하며, 결제 시스템이 장애가 나면 주문도 못받는다는 것을 확인:
-
-
-```
-# 결제 (pay) 서비스를 잠시 내려놓음 (ctrl+c)
-
-#주문처리
-http localhost:8081/orders item=통닭 storeId=1   #Fail
-http localhost:8081/orders item=피자 storeId=2   #Fail
-
-#결제서비스 재기동
-cd 결제
-mvn spring-boot:run
-
-#주문처리
-http localhost:8081/orders item=통닭 storeId=1   #Success
-http localhost:8081/orders item=피자 storeId=2   #Success
-```
-
-- 또한 과도한 요청시에 서비스 장애가 도미노 처럼 벌어질 수 있다. (서킷브레이커, 폴백 처리는 운영단계에서 설명한다.)
-
-
-
-
-## 비동기식 호출 / 시간적 디커플링 / 장애격리 / 최종 (Eventual) 일관성 테스트
-
-
-결제가 이루어진 후에 상점시스템으로 이를 알려주는 행위는 동기식이 아니라 비 동기식으로 처리하여 상점 시스템의 처리를 위하여 결제주문이 블로킹 되지 않아도록 처리한다.
- 
-- 이를 위하여 결제이력에 기록을 남긴 후에 곧바로 결제승인이 되었다는 도메인 이벤트를 카프카로 송출한다(Publish)
- 
-```
-package fooddelivery;
-
-@Entity
-@Table(name="결제이력_table")
-public class 결제이력 {
-
- ...
-    @PrePersist
-    public void onPrePersist(){
-        결제승인됨 결제승인됨 = new 결제승인됨();
-        BeanUtils.copyProperties(this, 결제승인됨);
-        결제승인됨.publish();
+    public void onPostPersist() {
+        Requested requested = new Requested(this);
+        requested.publishAfterCommit();
     }
 
-}
-```
-- 상점 서비스에서는 결제승인 이벤트에 대해서 이를 수신하여 자신의 정책을 처리하도록 PolicyHandler 를 구현한다:
-
-```
-package fooddelivery;
-
-...
-
-@Service
-public class PolicyHandler{
-
-    @StreamListener(KafkaProcessor.INPUT)
-    public void whenever결제승인됨_주문정보받음(@Payload 결제승인됨 결제승인됨){
-
-        if(결제승인됨.isMe()){
-            System.out.println("##### listener 주문정보받음 : " + 결제승인됨.toJson());
-            // 주문 정보를 받았으니, 요리를 슬슬 시작해야지..
-            
+    @PostUpdate
+    public void onPostUpdate() {
+        if (this.state.equals("approved")) {
+            Approved approved = new Approved(this);
+            approved.publishAfterCommit();
+        }
+        else if (this.state.equals("rejected")) {
+            Rejected rejected = new Rejected(this);
+            rejected.publishAfterCommit();
+        }
+        else if (this.state.equals("stateChanged")) {
+            StateChanged stateChanged = new StateChanged(this);
+            stateChanged.publishAfterCommit();
+        }
+        else if (this.state.equals("requested")) {
+            Requested requested = new Requested(this);
+            requested.publishAfterCommit();
+        }
+        else if (this.state.equals("requestCanceled")) {
+            RequestCanceled requestCanceled = new RequestCanceled(this);
+            requestCanceled.publishAfterCommit();
         }
     }
 
+```
+
+## 보상처리 Compensation
+
+- 시나리오에서 모델생성요청을 취소하였을때, 생성 및 학습중인 요청건은 취소할 수 없는 상태가 되며, 완료될때까지 기다려야함. 완료된 후 정상완료로 이벤트를 전파하게될 경우 업무 프로세스 오류가 발생할 수 있음. 해당 이벤트 전파 못하도록 막아줘야함.
+
+```
+# 업데이트 전 현재 요청상태를 Feign 으로 확인한 후 업데이트 여부 결정
+
+# Feign 설정
+@FeignClient(name = "models", url = "http://localhost:8088")
+public interface ModelClient {
+  @GetMapping("/models/{id}")
+  Approved callOtherService(@PathVariable("id") Long id);
 }
 
-```
-실제 구현을 하자면, 카톡 등으로 점주는 노티를 받고, 요리를 마친후, 주문 상태를 UI에 입력할테니, 우선 주문정보를 DB에 받아놓은 후, 이후 처리는 해당 Aggregate 내에서 하면 되겠다.:
-  
-```
-  @Autowired 주문관리Repository 주문관리Repository;
-  
-  @StreamListener(KafkaProcessor.INPUT)
-  public void whenever결제승인됨_주문정보받음(@Payload 결제승인됨 결제승인됨){
 
-      if(결제승인됨.isMe()){
-          카톡전송(" 주문이 왔어요! : " + 결제승인됨.toString(), 주문.getStoreId());
+# 동기화를 위한 확인
 
-          주문관리 주문 = new 주문관리();
-          주문.setId(결제승인됨.getOrderId());
-          주문관리Repository.save(주문);
-      }
-  }
+    Approved approved = modelClient.callOtherService(core.getId());
+    System.out.println("############ FEIGN:  " + approved);
+    if( approved.getState().equals("requestCanceled") ){
+      core.setState("requestCanceled");
+    }
+    else {
+      core.setState("completed");
+    }
 
 ```
 
-상점 시스템은 주문/결제와 완전히 분리되어있으며, 이벤트 수신에 따라 처리되기 때문에, 상점시스템이 유지보수로 인해 잠시 내려간 상태라도 주문을 받는데 문제가 없다:
-```
-# 상점 서비스 (store) 를 잠시 내려놓음 (ctrl+c)
+## 단일진입점 Gateway
 
-#주문처리
-http localhost:8081/orders item=통닭 storeId=1   #Success
-http localhost:8081/orders item=피자 storeId=2   #Success
-
-#주문상태 확인
-http localhost:8080/orders     # 주문상태 안바뀜 확인
-
-#상점 서비스 기동
-cd 상점
-mvn spring-boot:run
-
-#주문상태 확인
-http localhost:8080/orders     # 모든 주문의 상태가 "배송됨"으로 확인
-```
-
-
-# 운영
-
-## CI/CD 설정
-
-
-각 구현체들은 각자의 source repository 에 구성되었고, 사용한 CI/CD 플랫폼은 GCP를 사용하였으며, pipeline build script 는 각 프로젝트 폴더 이하에 cloudbuild.yml 에 포함되었다.
-
-
-## 동기식 호출 / 서킷 브레이킹 / 장애격리
-
-* 서킷 브레이킹 프레임워크의 선택: Spring FeignClient + Hystrix 옵션을 사용하여 구현함
-
-시나리오는 단말앱(app)-->결제(pay) 시의 연결을 RESTful Request/Response 로 연동하여 구현이 되어있고, 결제 요청이 과도할 경우 CB 를 통하여 장애격리.
-
-- Hystrix 를 설정:  요청처리 쓰레드에서 처리시간이 610 밀리가 넘어서기 시작하여 어느정도 유지되면 CB 회로가 닫히도록 (요청을 빠르게 실패처리, 차단) 설정
-```
-# application.yml
-
-hystrix:
-  command:
-    # 전역설정
-    default:
-      execution.isolation.thread.timeoutInMilliseconds: 610
+- Gateway는 Spring Gateway를 적용하였으며 관련된 설정은 아래와 같음.
 
 ```
-
-- 피호출 서비스(결제:pay) 의 임의 부하 처리 - 400 밀리에서 증감 220 밀리 정도 왔다갔다 하게
+spring:
+  profiles: default
+  cloud:
+    gateway:
+      routes:
+        - id: model
+          uri: http://localhost:8082
+          predicates:
+            - Path=/models/**,
+        - id: notice
+          uri: http://localhost:8083
+          predicates:
+            - Path=/notices/**,
+        - id: core
+          uri: http://localhost:8084
+          predicates:
+            - Path=/cores/**,
+        - id: target
+          uri: http://localhost:8085
+          predicates:
+            - Path=/targets/**,
+        - id: frontend
+          uri: http://localhost:8080
+          predicates:
+            - Path=/**
 ```
-# (pay) 결제이력.java (Entity)
 
-    @PrePersist
-    public void onPrePersist(){  //결제이력을 저장한 후 적당한 시간 끌기
+## 분산 데이터 프로젝션 CQRS
 
-        ...
-        
+- Read 전용 DB를 위한 설정은 아래와 같이 발생된 이벤트 Sub 하여 처리
+
+```
+    @StreamListener(
+        value = KafkaProcessor.INPUT,
+        condition = "headers['serviceType']=='model'"
+    )
+    public void whenRequested_then_CREATE_1(@Payload Requested requested) {
         try {
-            Thread.currentThread().sleep((long) (400 + Math.random() * 220));
-        } catch (InterruptedException e) {
+            if (!requested.validate()) return;
+
+            // view 객체 생성
+            MyRequest myRequest = new MyRequest();
+            // view 객체에 이벤트의 Value 를 set 함
+            myRequest.setId(requested.getId());
+            myRequest.setState(requested.getState());
+            myRequest.setUserId(requested.getUserId());
+            myRequest.setModelName(requested.getModelName());
+            // view 레파지 토리에 save
+            myRequestRepository.save(myRequest);
+            System.out.println("############ CQRS 에 저장:  " + requested);
+        } catch (Exception e) {
             e.printStackTrace();
         }
     }
 ```
 
-* 부하테스터 siege 툴을 통한 서킷 브레이커 동작 확인:
-- 동시사용자 100명
-- 60초 동안 실시
+# 클라우드 배포 역량
+
+## Container 운영
+
+- 각 서비스들은 CI/CD 파이프라인에 의하여 CI의 특정 이벤트에따라 자동으로 Cloud 환경에 Deploy 하게된다. 관련된 설정을 아래 설명함.
+
+### Github repository 확인
+
+    Github와 Gitlab 에서 소스코드를 관리할 수 있으며 Final 프로젝트는 Github에 upload
+
+![image](https://github.com/grapefr/CloudNativeReport/assets/68136339/db23bbae-9385-4cd2-bc52-b66dbd0c5eeb)
+
+### Docker Rising 적용
+
+- openjdk 이미지를 베이스로 jar 파일을 실행시킴
+- Log 파일 적재를 위하여 /data 폴더 생성
 
 ```
-$ siege -c100 -t60S -r10 --content-type "application/json" 'http://localhost:8081/orders POST {"item": "chicken"}'
+# DockerFile
+FROM openjdk:15-jdk-alpine
+RUN mkdir /data
+COPY target/*SNAPSHOT.jar app.jar
+EXPOSE 8080
+ENV TZ=Asia/Seoul
+RUN ln -snf /usr/share/zoneinfo/$TZ /etc/localtime && echo $TZ > /etc/timezone
+ENTRYPOINT ["java","-Xmx400M","-Djava.security.egd=file:/dev/./urandom","-jar","/app.jar","--spring.profiles.active=docker"]
+```
 
-** SIEGE 4.0.5
-** Preparing 100 concurrent users for battle.
+```
+#application.yaml
+logging:
+  file:
+    name: /data/app.log
+```
+
+### CodeBuild 내 파이프라인
+
+- 빌드용 서비스이나 post build 프로세스에 배포 스크립트를 적용함
+  ![image](https://github.com/grapefr/CloudNativeReport/assets/68136339/6765b8bf-c35a-4b64-9bc1-6ab243ad3396)
+  ![image](https://github.com/grapefr/CloudNativeReport/assets/68136339/71005c0c-dfa3-445e-b7d8-fe4c51eaa3ef)
+
+### ECR 내 repo
+
+- post build 스크립트내 만들어진 image를 ECR에 push
+  ![image](https://github.com/grapefr/CloudNativeReport/assets/68136339/bb17b713-f10a-4e6b-8b95-c027c41e7769)
+
+### EKS 배포
+
+- 이미지 Push 후 쿠버네티스내 Service와 Deployment를 적용 ( 스크립트 )
+
+```
+  post_build:
+    commands:
+      - echo Pushing the Docker image...
+      - docker push $AWS_ACCOUNT_ID.dkr.ecr.$AWS_DEFAULT_REGION.amazonaws.com/$_PROJECT_NAME:$CODEBUILD_RESOLVED_SOURCE_VERSION
+      - echo connect kubectl
+      - kubectl config set-cluster k8s --server="$KUBE_URL" --insecure-skip-tls-verify=true
+      - kubectl config set-credentials admin --token="$KUBE_TOKEN"
+      - kubectl config set-context default --cluster=k8s --user=admin
+      - kubectl config use-context default
+      - |
+        cat <<EOF | kubectl apply -f -
+        apiVersion: v1
+        kind: Service
+        metadata:
+          name: $_PROJECT_NAME
+          labels:
+            app: $_PROJECT_NAME
+        spec:
+          ports:
+            - port: 8080
+              targetPort: 8080
+          selector:
+            app: $_PROJECT_NAME
+        EOF
+      - |
+        cat  <<EOF | kubectl apply -f -
+        apiVersion: apps/v1
+        kind: Deployment
+        metadata:
+          name: $_PROJECT_NAME
+          labels:
+            app: $_PROJECT_NAME
+        spec:
+          replicas: 1
+          selector:
+            matchLabels:
+              app: $_PROJECT_NAME
+          template:
+            metadata:
+              labels:
+                app: $_PROJECT_NAME
+            spec:
+              containers:
+                - name: $_PROJECT_NAME
+                  image: $AWS_ACCOUNT_ID.dkr.ecr.$AWS_DEFAULT_REGION.amazonaws.com/$_PROJECT_NAME:$CODEBUILD_RESOLVED_SOURCE_VERSION
+```
+
+- [컨테이너 인프라 설계 및 구성 역량](#컨테이너-인프라-설계-및-구성-역량)
+  - [컨테이너 자동확장 HPA](#컨테이너-자동확장-HPA)
+  - [컨테이너로부터 환경 분리 ConfigMap/Secret](#컨테이너로부터-환경-분리-ConfigMap/Secret)
+  - [클라우드스토리지 활용 PVC](#클라우드스토리지-활용-PVC)
+  - [셀프 힐링/무정지배포 Liveness/Rediness Probe](#셀프-힐링/무정지배포-Liveness/Rediness-Probe)
+  - [서비스 매쉬 응용 Mesh](서비스-매쉬-응용-Mesh)
+  - [통합 모니터링 Loggregation/Monitoring](통합-모니터링-Loggregation/Monitoring)
+
+# 컨테이너 인프라 설계 및 구성 역량
+
+체크포인트가 모두 적용된 쿠버네티스 내 default namespace
+
+```
+[cloudshell-user@ip-10-132-33-59 ~]$ kubectl get all -o wide
+NAME                           READY   STATUS    RESTARTS   AGE   IP               NODE                                              NOMINATED NODE   READINESS GATES
+pod/core-5fb7895678-s7hnr      2/2     Running   0          12h   192.168.82.244   ip-192-168-73-11.ca-central-1.compute.internal    <none>           <none>
+pod/gateway-6f895bccf6-x2rkb   2/2     Running   0          14h   192.168.80.60    ip-192-168-73-11.ca-central-1.compute.internal    <none>           <none>
+pod/kafka-client               2/2     Running   0          14h   192.168.26.4     ip-192-168-11-240.ca-central-1.compute.internal   <none>           <none>
+pod/kafka-controller-0         1/1     Running   0          17h   192.168.50.116   ip-192-168-49-13.ca-central-1.compute.internal    <none>           <none>
+pod/kafka-controller-1         1/1     Running   0          17h   192.168.27.200   ip-192-168-11-240.ca-central-1.compute.internal   <none>           <none>
+pod/kafka-controller-2         1/1     Running   0          17h   192.168.93.52    ip-192-168-73-11.ca-central-1.compute.internal    <none>           <none>
+pod/model-5767f6b645-knj6b     2/2     Running   0          12h   192.168.45.113   ip-192-168-49-13.ca-central-1.compute.internal    <none>           <none>
+pod/notice-54c798cf97-9bzq6    2/2     Running   0          12h   192.168.20.98    ip-192-168-11-240.ca-central-1.compute.internal   <none>           <none>
+pod/siege                      1/1     Running   0          17h   192.168.39.93    ip-192-168-49-13.ca-central-1.compute.internal    <none>           <none>
+pod/target-7c88bd5df7-658jn    2/2     Running   0          10h   192.168.92.229   ip-192-168-73-11.ca-central-1.compute.internal    <none>           <none>
+
+NAME                                TYPE        CLUSTER-IP       EXTERNAL-IP   PORT(S)                      AGE   SELECTOR
+service/core                        ClusterIP   10.100.76.89     <none>        8080/TCP                     18h   app=core
+service/gateway                     ClusterIP   10.100.161.253   <none>        8080/TCP                     18h   app=gateway
+service/kafka                       ClusterIP   10.100.109.201   <none>        9092/TCP                     17h   app.kubernetes.io/instance=kafka,app.kubernetes.io/name=kafka,app.kubernetes.io/part-of=kafka
+service/kafka-controller-headless   ClusterIP   None             <none>        9094/TCP,9092/TCP,9093/TCP   17h   app.kubernetes.io/component=controller-eligible,app.kubernetes.io/instance=kafka,app.kubernetes.io/name=kafka,app.kubernetes.io/part-of=kafka
+service/kubernetes                  ClusterIP   10.100.0.1       <none>        443/TCP                      34h   <none>
+service/model                       ClusterIP   10.100.143.252   <none>        8080/TCP                     18h   app=model
+service/my-kafka                    ClusterIP   10.100.179.248   <none>        9092/TCP                     17h   app.kubernetes.io/instance=kafka,app.kubernetes.io/name=kafka,app.kubernetes.io/part-of=kafka
+service/notice                      ClusterIP   10.100.234.122   <none>        8080/TCP                     18h   app=notice
+service/target                      ClusterIP   10.100.62.89     <none>        8080/TCP                     18h   app=target
+
+NAME                      READY   UP-TO-DATE   AVAILABLE   AGE   CONTAINERS   IMAGES                                                                                             SELECTOR
+deployment.apps/core      1/1     1            1           18h   core         879772956301.dkr.ecr.ca-central-1.amazonaws.com/core:2fe53bd87a8b275efe799066509c97932175a903      app=core
+deployment.apps/gateway   1/1     1            1           18h   gateway      879772956301.dkr.ecr.ca-central-1.amazonaws.com/gateway:12a264aef5dc0cb77149c56e652ce6044b3302cb   app=gateway
+deployment.apps/model     1/1     1            1           18h   model        879772956301.dkr.ecr.ca-central-1.amazonaws.com/model:446b7afb98d35eae610d6e0a6c2856bee08bbc9a     app=model
+deployment.apps/notice    1/1     1            1           18h   notice       879772956301.dkr.ecr.ca-central-1.amazonaws.com/notice:ba61eb1e00bb557367ad9d3b532770e2fe3ee0af    app=notice
+deployment.apps/target    1/1     1            1           18h   target       879772956301.dkr.ecr.ca-central-1.amazonaws.com/target:bfee56e94063c4517973b8e80c3478c088fe5568    app=target
+
+NAME                                 DESIRED   CURRENT   READY   AGE   CONTAINERS   IMAGES                                                                                             SELECTOR
+replicaset.apps/core-5fb7895678      1         1         1       12h   core         879772956301.dkr.ecr.ca-central-1.amazonaws.com/core:2fe53bd87a8b275efe799066509c97932175a903      app=core,pod-template-hash=5fb7895678
+replicaset.apps/gateway-6f895bccf6   1         1         1       14h   gateway      879772956301.dkr.ecr.ca-central-1.amazonaws.com/gateway:12a264aef5dc0cb77149c56e652ce6044b3302cb   app=gateway,pod-template-hash=6f895bccf6
+replicaset.apps/model-5767f6b645     1         1         1       12h   model        879772956301.dkr.ecr.ca-central-1.amazonaws.com/model:446b7afb98d35eae610d6e0a6c2856bee08bbc9a     app=model,pod-template-hash=5767f6b645
+replicaset.apps/notice-54c798cf97    1         1         1       12h   notice       879772956301.dkr.ecr.ca-central-1.amazonaws.com/notice:ba61eb1e00bb557367ad9d3b532770e2fe3ee0af    app=notice,pod-template-hash=54c798cf97
+replicaset.apps/target-7c88bd5df7    1         1         1       10h   target       879772956301.dkr.ecr.ca-central-1.amazonaws.com/target:bfee56e94063c4517973b8e80c3478c088fe5568    app=target,pod-template-hash=7c88bd5df7
+
+
+NAME                                READY   AGE   CONTAINERS   IMAGES
+statefulset.apps/kafka-controller   3/3     17h   kafka        docker.io/bitnami/kafka:3.6.1-debian-12-r11
+
+NAME                                        REFERENCE          TARGETS   MINPODS   MAXPODS   REPLICAS   AGE
+horizontalpodautoscaler.autoscaling/model   Deployment/model   3%/50%    1         3         1          13h
+[cloudshell-user@ip-10-132-33-59 ~]$
+```
+
+### 컨테이너 자동확장 HPA
+
+#### AutoScale을 적용하기 위해서는 쿠버네티스 내 metric서버가 설치되어있어야함
+
+```
+kubectl apply -f https://github.com/kubernetes-sigs/metrics-server/releases/latest/download/components.yaml
+```
+
+#### Deployment 내 resource 정책 적용 ( 시작시 필요한 최소 CPU 자원 )
+
+```
+              containers:
+                - name: $_PROJECT_NAME
+                  image: $AWS_ACCOUNT_ID.dkr.ecr.$AWS_DEFAULT_REGION.amazonaws.com/
+                  ... 중간 생략 ...
+                  resources:
+                    requests:
+                      cpu: "200m"
+```
+
+#### 이후 서비스 Model 에 대하여 AutoScale 적용
+
+```
+kubectl autoscale deployment model --cpu-percent=50 --min=1 --max=3
+```
+
+#### 동작 확인
+
+1. 부하발생기 설치
+
+```
+kubectl apply -f - <<EOF
+apiVersion: v1
+kind: Pod
+metadata:
+  name: siege
+  namespace: mall
+spec:
+  containers:
+  - name: siege
+    image: apexacme/siege-nginx
+EOF
+```
+
+2. 부하발생기 접속 후 siege 명령어 실행
+
+```
+[cloudshell-user@ip-10-132-33-59 ~]$ kubectl exec -it siege -- /bin/bash
+root@siege:/#
+root@siege:/# siege -c20 -t2S -v "http://gateway:8080/models POST userId=test&state=request&modelName=TestModel1"
+** SIEGE 4.0.4
+** Preparing 20 concurrent users for battle.
 The server is now under siege...
+HTTP/1.1 415     0.24 secs:     121 bytes ==> POST http://gateway:8080/models
+...중간생략 ...
+HTTP/1.1 415     0.09 secs:     121 bytes ==> POST http://gateway:8080/models
+HTTP/1.1 415     0.09 secs:     121 bytes ==> POST http://gateway:8080/models
 
-HTTP/1.1 201     0.68 secs:     207 bytes ==> POST http://localhost:8081/orders
-HTTP/1.1 201     0.68 secs:     207 bytes ==> POST http://localhost:8081/orders
-HTTP/1.1 201     0.70 secs:     207 bytes ==> POST http://localhost:8081/orders
-HTTP/1.1 201     0.70 secs:     207 bytes ==> POST http://localhost:8081/orders
-HTTP/1.1 201     0.73 secs:     207 bytes ==> POST http://localhost:8081/orders
-HTTP/1.1 201     0.75 secs:     207 bytes ==> POST http://localhost:8081/orders
-HTTP/1.1 201     0.77 secs:     207 bytes ==> POST http://localhost:8081/orders
-HTTP/1.1 201     0.97 secs:     207 bytes ==> POST http://localhost:8081/orders
-HTTP/1.1 201     0.81 secs:     207 bytes ==> POST http://localhost:8081/orders
-HTTP/1.1 201     0.87 secs:     207 bytes ==> POST http://localhost:8081/orders
-HTTP/1.1 201     1.12 secs:     207 bytes ==> POST http://localhost:8081/orders
-HTTP/1.1 201     1.16 secs:     207 bytes ==> POST http://localhost:8081/orders
-HTTP/1.1 201     1.17 secs:     207 bytes ==> POST http://localhost:8081/orders
-HTTP/1.1 201     1.26 secs:     207 bytes ==> POST http://localhost:8081/orders
-HTTP/1.1 201     1.25 secs:     207 bytes ==> POST http://localhost:8081/orders
+Lifting the server siege...HTTP/1.1 415     0.04 secs:     121 bytes ==> POST http://gateway:8080/models
+HTTP/1.1 415     0.05 secs:     121 bytes ==> POST http://gateway:8080/models
 
-* 요청이 과도하여 CB를 동작함 요청을 차단
+Transactions:                    320 hits
+Availability:                 100.00 %
+Elapsed time:                   1.87 secs
+Data transferred:               0.04 MB
+Response time:                  0.11 secs
+Transaction rate:             171.12 trans/sec
+Throughput:                     0.02 MB/sec
+Concurrency:                   18.26
+Successful transactions:           0
+Failed transactions:               0
+Longest transaction:            0.32
+Shortest transaction:           0.00
 
-HTTP/1.1 500     1.29 secs:     248 bytes ==> POST http://localhost:8081/orders   
-HTTP/1.1 500     1.24 secs:     248 bytes ==> POST http://localhost:8081/orders
-HTTP/1.1 500     1.23 secs:     248 bytes ==> POST http://localhost:8081/orders
-HTTP/1.1 500     1.42 secs:     248 bytes ==> POST http://localhost:8081/orders
-HTTP/1.1 500     2.08 secs:     248 bytes ==> POST http://localhost:8081/orders
-HTTP/1.1 201     1.29 secs:     207 bytes ==> POST http://localhost:8081/orders
-HTTP/1.1 500     1.24 secs:     248 bytes ==> POST http://localhost:8081/orders
-
-* 요청을 어느정도 돌려보내고나니, 기존에 밀린 일들이 처리되었고, 회로를 닫아 요청을 다시 받기 시작
-
-HTTP/1.1 201     1.46 secs:     207 bytes ==> POST http://localhost:8081/orders  
-HTTP/1.1 201     1.33 secs:     207 bytes ==> POST http://localhost:8081/orders
-HTTP/1.1 201     1.36 secs:     207 bytes ==> POST http://localhost:8081/orders
-HTTP/1.1 201     1.63 secs:     207 bytes ==> POST http://localhost:8081/orders
-HTTP/1.1 201     1.65 secs:     207 bytes ==> POST http://localhost:8081/orders
-HTTP/1.1 201     1.68 secs:     207 bytes ==> POST http://localhost:8081/orders
-HTTP/1.1 201     1.69 secs:     207 bytes ==> POST http://localhost:8081/orders
-HTTP/1.1 201     1.71 secs:     207 bytes ==> POST http://localhost:8081/orders
-HTTP/1.1 201     1.71 secs:     207 bytes ==> POST http://localhost:8081/orders
-HTTP/1.1 201     1.74 secs:     207 bytes ==> POST http://localhost:8081/orders
-HTTP/1.1 201     1.76 secs:     207 bytes ==> POST http://localhost:8081/orders
-HTTP/1.1 201     1.79 secs:     207 bytes ==> POST http://localhost:8081/orders
-
-* 다시 요청이 쌓이기 시작하여 건당 처리시간이 610 밀리를 살짝 넘기기 시작 => 회로 열기 => 요청 실패처리
-
-HTTP/1.1 500     1.93 secs:     248 bytes ==> POST http://localhost:8081/orders    
-HTTP/1.1 500     1.92 secs:     248 bytes ==> POST http://localhost:8081/orders
-HTTP/1.1 500     1.93 secs:     248 bytes ==> POST http://localhost:8081/orders
-
-* 생각보다 빨리 상태 호전됨 - (건당 (쓰레드당) 처리시간이 610 밀리 미만으로 회복) => 요청 수락
-
-HTTP/1.1 201     2.24 secs:     207 bytes ==> POST http://localhost:8081/orders  
-HTTP/1.1 201     2.32 secs:     207 bytes ==> POST http://localhost:8081/orders
-HTTP/1.1 201     2.16 secs:     207 bytes ==> POST http://localhost:8081/orders
-HTTP/1.1 201     2.19 secs:     207 bytes ==> POST http://localhost:8081/orders
-HTTP/1.1 201     2.19 secs:     207 bytes ==> POST http://localhost:8081/orders
-HTTP/1.1 201     2.19 secs:     207 bytes ==> POST http://localhost:8081/orders
-HTTP/1.1 201     2.21 secs:     207 bytes ==> POST http://localhost:8081/orders
-HTTP/1.1 201     2.29 secs:     207 bytes ==> POST http://localhost:8081/orders
-HTTP/1.1 201     2.30 secs:     207 bytes ==> POST http://localhost:8081/orders
-HTTP/1.1 201     2.38 secs:     207 bytes ==> POST http://localhost:8081/orders
-HTTP/1.1 201     2.59 secs:     207 bytes ==> POST http://localhost:8081/orders
-HTTP/1.1 201     2.61 secs:     207 bytes ==> POST http://localhost:8081/orders
-HTTP/1.1 201     2.62 secs:     207 bytes ==> POST http://localhost:8081/orders
-HTTP/1.1 201     2.64 secs:     207 bytes ==> POST http://localhost:8081/orders
-HTTP/1.1 201     4.01 secs:     207 bytes ==> POST http://localhost:8081/orders
-HTTP/1.1 201     4.27 secs:     207 bytes ==> POST http://localhost:8081/orders
-HTTP/1.1 201     4.33 secs:     207 bytes ==> POST http://localhost:8081/orders
-HTTP/1.1 201     4.45 secs:     207 bytes ==> POST http://localhost:8081/orders
-HTTP/1.1 201     4.52 secs:     207 bytes ==> POST http://localhost:8081/orders
-HTTP/1.1 201     4.57 secs:     207 bytes ==> POST http://localhost:8081/orders
-HTTP/1.1 201     4.69 secs:     207 bytes ==> POST http://localhost:8081/orders
-HTTP/1.1 201     4.70 secs:     207 bytes ==> POST http://localhost:8081/orders
-HTTP/1.1 201     4.69 secs:     207 bytes ==> POST http://localhost:8081/orders
-
-* 이후 이러한 패턴이 계속 반복되면서 시스템은 도미노 현상이나 자원 소모의 폭주 없이 잘 운영됨
-
-
-HTTP/1.1 500     4.76 secs:     248 bytes ==> POST http://localhost:8081/orders
-HTTP/1.1 500     4.23 secs:     248 bytes ==> POST http://localhost:8081/orders
-HTTP/1.1 201     4.76 secs:     207 bytes ==> POST http://localhost:8081/orders
-HTTP/1.1 201     4.74 secs:     207 bytes ==> POST http://localhost:8081/orders
-HTTP/1.1 500     4.82 secs:     248 bytes ==> POST http://localhost:8081/orders
-HTTP/1.1 201     4.82 secs:     207 bytes ==> POST http://localhost:8081/orders
-HTTP/1.1 201     4.84 secs:     207 bytes ==> POST http://localhost:8081/orders
-HTTP/1.1 201     4.66 secs:     207 bytes ==> POST http://localhost:8081/orders
-HTTP/1.1 500     5.03 secs:     248 bytes ==> POST http://localhost:8081/orders
-HTTP/1.1 500     4.22 secs:     248 bytes ==> POST http://localhost:8081/orders
-HTTP/1.1 500     4.19 secs:     248 bytes ==> POST http://localhost:8081/orders
-HTTP/1.1 500     4.18 secs:     248 bytes ==> POST http://localhost:8081/orders
-HTTP/1.1 201     4.69 secs:     207 bytes ==> POST http://localhost:8081/orders
-HTTP/1.1 201     4.65 secs:     207 bytes ==> POST http://localhost:8081/orders
-HTTP/1.1 201     5.13 secs:     207 bytes ==> POST http://localhost:8081/orders
-HTTP/1.1 500     4.84 secs:     248 bytes ==> POST http://localhost:8081/orders
-HTTP/1.1 500     4.25 secs:     248 bytes ==> POST http://localhost:8081/orders
-HTTP/1.1 500     4.25 secs:     248 bytes ==> POST http://localhost:8081/orders
-HTTP/1.1 201     4.80 secs:     207 bytes ==> POST http://localhost:8081/orders
-HTTP/1.1 500     4.87 secs:     248 bytes ==> POST http://localhost:8081/orders
-HTTP/1.1 500     4.33 secs:     248 bytes ==> POST http://localhost:8081/orders
-HTTP/1.1 201     4.86 secs:     207 bytes ==> POST http://localhost:8081/orders
-HTTP/1.1 500     4.96 secs:     248 bytes ==> POST http://localhost:8081/orders
-HTTP/1.1 500     4.34 secs:     248 bytes ==> POST http://localhost:8081/orders
-HTTP/1.1 500     4.04 secs:     248 bytes ==> POST http://localhost:8081/orders
-HTTP/1.1 201     4.50 secs:     207 bytes ==> POST http://localhost:8081/orders
-HTTP/1.1 201     4.95 secs:     207 bytes ==> POST http://localhost:8081/orders
-HTTP/1.1 201     4.54 secs:     207 bytes ==> POST http://localhost:8081/orders
-HTTP/1.1 201     4.65 secs:     207 bytes ==> POST http://localhost:8081/orders
-
-
-:
-:
-
-Transactions:		        1025 hits
-Availability:		       63.55 %
-Elapsed time:		       59.78 secs
-Data transferred:	        0.34 MB
-Response time:		        5.60 secs
-Transaction rate:	       17.15 trans/sec
-Throughput:		        0.01 MB/sec
-Concurrency:		       96.02
-Successful transactions:        1025
-Failed transactions:	         588
-Longest transaction:	        9.20
-Shortest transaction:	        0.00
-
-```
-- 운영시스템은 죽지 않고 지속적으로 CB 에 의하여 적절히 회로가 열림과 닫힘이 벌어지면서 자원을 보호하고 있음을 보여줌. 하지만, 63.55% 가 성공하였고, 46%가 실패했다는 것은 고객 사용성에 있어 좋지 않기 때문에 Retry 설정과 동적 Scale out (replica의 자동적 추가,HPA) 을 통하여 시스템을 확장 해주는 후속처리가 필요.
-
-- Retry 의 설정 (istio)
-- Availability 가 높아진 것을 확인 (siege)
-
-### 오토스케일 아웃
-앞서 CB 는 시스템을 안정되게 운영할 수 있게 해줬지만 사용자의 요청을 100% 받아들여주지 못했기 때문에 이에 대한 보완책으로 자동화된 확장 기능을 적용하고자 한다. 
-
-
-- 결제서비스에 대한 replica 를 동적으로 늘려주도록 HPA 를 설정한다. 설정은 CPU 사용량이 15프로를 넘어서면 replica 를 10개까지 늘려준다:
-```
-kubectl autoscale deploy pay --min=1 --max=10 --cpu-percent=15
-```
-- CB 에서 했던 방식대로 워크로드를 2분 동안 걸어준다.
-```
-siege -c100 -t120S -r10 --content-type "application/json" 'http://localhost:8081/orders POST {"item": "chicken"}'
-```
-- 오토스케일이 어떻게 되고 있는지 모니터링을 걸어둔다:
-```
-kubectl get deploy pay -w
-```
-- 어느정도 시간이 흐른 후 (약 30초) 스케일 아웃이 벌어지는 것을 확인할 수 있다:
-```
-NAME    DESIRED   CURRENT   UP-TO-DATE   AVAILABLE   AGE
-pay     1         1         1            1           17s
-pay     1         2         1            1           45s
-pay     1         4         1            1           1m
-:
-```
-- siege 의 로그를 보아도 전체적인 성공률이 높아진 것을 확인 할 수 있다. 
-```
-Transactions:		        5078 hits
-Availability:		       92.45 %
-Elapsed time:		       120 secs
-Data transferred:	        0.34 MB
-Response time:		        5.60 secs
-Transaction rate:	       17.15 trans/sec
-Throughput:		        0.01 MB/sec
-Concurrency:		       96.02
+root@siege:/#
 ```
 
+3. model POD 의 상태를 모니터링
+   ![finalproject2024-02-22 16 41 12 (2)](https://github.com/grapefr/CloudNativeReport/assets/68136339/c4d62b87-0932-4a71-a817-288a6d9376ac)
+   ![finalproject2024-02-22 16 41 12 (3)](https://github.com/grapefr/CloudNativeReport/assets/68136339/6905c4bf-f91f-44fc-8552-e97ca77207f3)
 
-## 무정지 재배포
+## 컨테이너로부터 환경 분리 ConfigMap/Secret
 
-* 먼저 무정지 재배포가 100% 되는 것인지 확인하기 위해서 Autoscaler 이나 CB 설정을 제거함
+가장 많이 사용하는 패턴인 LogLevel을 ConfigMap에서 가져와 적용
 
-- seige 로 배포작업 직전에 워크로드를 모니터링 함.
-```
-siege -c100 -t120S -r10 --content-type "application/json" 'http://localhost:8081/orders POST {"item": "chicken"}'
-
-** SIEGE 4.0.5
-** Preparing 100 concurrent users for battle.
-The server is now under siege...
-
-HTTP/1.1 201     0.68 secs:     207 bytes ==> POST http://localhost:8081/orders
-HTTP/1.1 201     0.68 secs:     207 bytes ==> POST http://localhost:8081/orders
-HTTP/1.1 201     0.70 secs:     207 bytes ==> POST http://localhost:8081/orders
-HTTP/1.1 201     0.70 secs:     207 bytes ==> POST http://localhost:8081/orders
-:
+### ConfigMap 생성
 
 ```
-
-- 새버전으로의 배포 시작
-```
-kubectl set image ...
-```
-
-- seige 의 화면으로 넘어가서 Availability 가 100% 미만으로 떨어졌는지 확인
-```
-Transactions:		        3078 hits
-Availability:		       70.45 %
-Elapsed time:		       120 secs
-Data transferred:	        0.34 MB
-Response time:		        5.60 secs
-Transaction rate:	       17.15 trans/sec
-Throughput:		        0.01 MB/sec
-Concurrency:		       96.02
-
-```
-배포기간중 Availability 가 평소 100%에서 70% 대로 떨어지는 것을 확인. 원인은 쿠버네티스가 성급하게 새로 올려진 서비스를 READY 상태로 인식하여 서비스 유입을 진행한 것이기 때문. 이를 막기위해 Readiness Probe 를 설정함:
-
-```
-# deployment.yaml 의 readiness probe 의 설정:
-
-
-kubectl apply -f kubernetes/deployment.yaml
+kubectl apply -f - <<EOF
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: config-dev
+  namespace: default
+data:
+  HYBERNATE_TYPE: trace
+  LOG_LEVEL: debug
+EOF
 ```
 
-- 동일한 시나리오로 재배포 한 후 Availability 확인:
+### 배포 스크립트 내 Deployment 수정
+
 ```
-Transactions:		        3078 hits
-Availability:		       100 %
-Elapsed time:		       120 secs
-Data transferred:	        0.34 MB
-Response time:		        5.60 secs
-Transaction rate:	       17.15 trans/sec
-Throughput:		        0.01 MB/sec
-Concurrency:		       96.02
+        apiVersion: apps/v1
+        kind: Deployment
+        metadata:
+          name: $_PROJECT_NAME
+          labels:
+            app: $_PROJECT_NAME
+        spec:
+          replicas: 1
+          selector:
+            matchLabels:
+              app: $_PROJECT_NAME
+          template:
+            metadata:
+              labels:
+                app: $_PROJECT_NAME
+            spec:
+              containers:
+                - name: $_PROJECT_NAME
+                  image: $AWS_ACCOUNT_ID.dkr.ecr.$AWS_DEFAULT_REGION.amazonaws.com/$_PROJECT_NAME:$CODEBUILD_RESOLVED_SOURCE_VERSION
+                  env:
+                  - name: HYBERNATE_TYPE
+                    valueFrom:
+                      configMapKeyRef:
+                        name: config-dev
+                        key: HYBERNATE_TYPE
+                  - name: LOG_LEVEL
+                    valueFrom:
+                      configMapKeyRef:
+                        name: config-dev
+                        key: LOG_LEVEL
+```
+
+### application.yaml 내 환경변수 적용 ( default 값 적용 )
+
+```
+logging:
+  level:
+    org.hibernate.type: ${HYBERNATE_TYPE:trace}
+    org.springframework.cloud: ${LOG_LEVEL:error}
+```
+
+### 출력되는 LogLevel 확인
+
+![finalproject2024-02-22 16 41 12 (4)](https://github.com/grapefr/CloudNativeReport/assets/68136339/6fc07223-2bb4-421f-81ad-a89d7644ba94)
+
+## 클라우드스토리지 활용 PVC
+
+컨테이너환경에서 컨테이너의 Data 영역은 컨테이너 라이프사이클과 같이한다. 즉 컨테이너가 삭제되면 Data도 삭제됨. 때문에 컨테이너의 라이프사이클에서 벗어나 자체 라이프사이클을 가진 Persistant Volume 기능이 있음. CSP 에서 제공하는 쿠버네티스의 경우 이 PV를 자사 솔루션과 연동하여 사용할 수 있게끔 각종드라이버의 StorageClass를 제공한다. 해당 StorageClass를 이용하기 위하여 POD에서는 PVC로 볼륨을 Mount함.
+
+### ebs csi driver 설정관련 가이드
+
+- aws 공식 문서외 쿠버네티스 관련 설정도 많지만.. 이번과정에서는 스킵함
+
+https://docs.aws.amazon.com/ko_kr/eks/latest/userguide/csi-iam-role.html
+https://docs.aws.amazon.com/ko_kr/eks/latest/userguide/managing-ebs-csi.html
+
+### StorageClass 확인
+
+```
+[cloudshell-user@ip-10-132-38-3 ~]$ kubectl get storageclass
+NAME               PROVISIONER             RECLAIMPOLICY   VOLUMEBINDINGMODE      ALLOWVOLUMEEXPANSION   AGE
+ebs-sc (default)   ebs.csi.aws.com         Delete          WaitForFirstConsumer   false                  34h
+gp2                kubernetes.io/aws-ebs   Delete          WaitForFirstConsumer   false                  35h
+[cloudshell-user@ip-10-132-38-3 ~]$
+```
+
+### PVC 생성
+
+```
+[cloudshell-user@ip-10-132-38-3 ~]$ kubectl get pvc ebs-claim -o yaml
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: ebs-claim
+  namespace: default
+spec:
+  accessModes:
+  - ReadWriteOnce
+  resources:
+    requests:
+      storage: 4Gi
+  storageClassName: ebs-sc
+status:
+  accessModes:
+  - ReadWriteOnce
+  capacity:
+    storage: 4Gi
+```
+
+### POD mount 및 Container mount
+
+```
+        cat  <<EOF | kubectl apply -f -
+        apiVersion: apps/v1
+        kind: Deployment
+        metadata:
+          name: $_PROJECT_NAME
+          labels:
+            app: $_PROJECT_NAME
+        spec:
+          replicas: 1
+          selector:
+            matchLabels:
+              app: $_PROJECT_NAME
+          template:
+            metadata:
+              labels:
+                app: $_PROJECT_NAME
+            spec:
+              containers:
+                - name: $_PROJECT_NAME
+                  image: $AWS_ACCOUNT_ID.dkr.ecr.$AWS_DEFAULT_REGION.amazonaws.com/
+                  .... 중간 생략 ...
+                    failureThreshold: 5
+                  volumeMounts:
+                  - name: pvc-vol
+                    mountPath: /data
+              volumes:
+              - name: pvc-vol
+                persistentVolumeClaim:
+                  claimName: ebs-claim
+```
+
+### 적용결과 확인
+
+```
+/ # df -h
+Filesystem                Size      Used Available Use% Mounted on
+overlay                  80.0G      6.6G     73.4G   8% /
+tmpfs                    64.0M         0     64.0M   0% /dev
+tmpfs                     1.9G         0      1.9G   0% /sys/fs/cgroup
+/dev/nvme3n1              3.9G    120.0K      3.8G   0% /data
+/dev/nvme0n1p1           80.0G      6.6G     73.4G   8% /etc/hosts
+/dev/nvme0n1p1           80.0G      6.6G     73.4G   8% /dev/termination-log
+/dev/nvme0n1p1           80.0G      6.6G     73.4G   8% /etc/hostname
+/dev/nvme0n1p1           80.0G      6.6G     73.4G   8% /etc/resolv.conf
+shm                      64.0M         0     64.0M   0% /dev/shm
+tmpfs                     3.2G     12.0K      3.2G   0% /run/secrets/kubernetes.io/serviceaccount
+tmpfs                     1.9G         0      1.9G   0% /proc/acpi
+tmpfs                    64.0M         0     64.0M   0% /proc/kcore
+tmpfs                    64.0M         0     64.0M   0% /proc/keys
+tmpfs                    64.0M         0     64.0M   0% /proc/latency_stats
+tmpfs                    64.0M         0     64.0M   0% /proc/timer_list
+tmpfs                    64.0M         0     64.0M   0% /proc/sched_debug
+tmpfs                     1.9G         0      1.9G   0% /sys/firmware
+/ # cd /data
+/data # ls -rlth
+total 112K
+drwx------    2 root     root       16.0K Feb 22 04:46 lost+found
+-rw-r--r--    1 root     root       94.6K Feb 22 04:47 app.log
+/data #
 
 ```
 
-배포기간 동안 Availability 가 변화없기 때문에 무정지 재배포가 성공한 것으로 확인됨.
+## 셀프 힐링/무정지배포 Liveness/Rediness Probe
 
+쿠버네티스에 POD의 상태체크 방법을 제공함으로서 롤링업데이트시 서비스중단을 방지할 수 있음.
 
-# 신규 개발 조직의 추가
+### 무정지배포를 위하여 Rediness Probe 적용
 
-  ![image](https://user-images.githubusercontent.com/487999/79684133-1d6c4300-826a-11ea-94a2-602e61814ebf.png)
-
-
-## 마케팅팀의 추가
-    - KPI: 신규 고객의 유입률 증대와 기존 고객의 충성도 향상
-    - 구현계획 마이크로 서비스: 기존 customer 마이크로 서비스를 인수하며, 고객에 음식 및 맛집 추천 서비스 등을 제공할 예정
-
-## 이벤트 스토밍 
-    ![image](https://user-images.githubusercontent.com/487999/79685356-2b729180-8273-11ea-9361-a434065f2249.png)
-
-
-## 헥사고날 아키텍처 변화 
-
-![image](https://user-images.githubusercontent.com/487999/79685243-1d704100-8272-11ea-8ef6-f4869c509996.png)
-
-## 구현  
-
-기존의 마이크로 서비스에 수정을 발생시키지 않도록 Inbund 요청을 REST 가 아닌 Event 를 Subscribe 하는 방식으로 구현. 기존 마이크로 서비스에 대하여 아키텍처나 기존 마이크로 서비스들의 데이터베이스 구조와 관계없이 추가됨. 
-
-## 운영과 Retirement
-
-Request/Response 방식으로 구현하지 않았기 때문에 서비스가 더이상 불필요해져도 Deployment 에서 제거되면 기존 마이크로 서비스에 어떤 영향도 주지 않음.
-
-* [비교] 결제 (pay) 마이크로서비스의 경우 API 변화나 Retire 시에 app(주문) 마이크로 서비스의 변경을 초래함:
-
-예) API 변화시
 ```
-# Order.java (Entity)
-
-    @PostPersist
-    public void onPostPersist(){
-
-        fooddelivery.external.결제이력 pay = new fooddelivery.external.결제이력();
-        pay.setOrderId(getOrderId());
-        
-        Application.applicationContext.getBean(fooddelivery.external.결제이력Service.class)
-                .결제(pay);
-
-                --> 
-
-        Application.applicationContext.getBean(fooddelivery.external.결제이력Service.class)
-                .결제2(pay);
-
-    }
+              containers:
+                - name: $_PROJECT_NAME
+                  image: $AWS_ACCOUNT_ID.dkr.ecr.$AWS_DEFAULT_REGION.amazonaws.com/$_PROJECT_NAME:$CODEBUILD_RESOLVED_SOURCE_VERSION
+                  env:
+                  - name: HYBERNATE_TYPE
+                    valueFrom:
+                      configMapKeyRef:
+                        name: config-dev
+                        key: HYBERNATE_TYPE
+                  - name: LOG_LEVEL
+                    valueFrom:
+                      configMapKeyRef:
+                        name: config-dev
+                        key: LOG_LEVEL
+                  ports:
+                    - containerPort: 8080
+                  resources:
+                    requests:
+                      cpu: "200m"
+                  readinessProbe:
+                    httpGet:
+                      path: /actuator/health
+                      port: 8080
+                    initialDelaySeconds: 10
+                    timeoutSeconds: 2
+                    periodSeconds: 5
+                    failureThreshold: 10
 ```
 
-예) Retire 시
+### 배포수행시 POD 상태 확인
+
+![finalproject2024-02-22 16 41 13 (2)](https://github.com/grapefr/CloudNativeReport/assets/68136339/317e6772-9e86-4a65-8b47-7948725853d7)
+![finalproject2024-02-22 16 41 13 (3)](https://github.com/grapefr/CloudNativeReport/assets/68136339/7fcd2d80-8dbd-4a1c-a7de-08b144e3ee46)
+
+### API 호출 상태 확인
+
 ```
-# Order.java (Entity)
+root@siege:/# siege -c10 -t300S -v "http://gateway:8080/models POST userId=test&state=request&modelName=TestModel1"
 
-    @PostPersist
-    public void onPostPersist(){
+HTTP/1.1 415     0.07 secs:     121 bytes ==> POST http://gateway:8080/models
 
-        /**
-        fooddelivery.external.결제이력 pay = new fooddelivery.external.결제이력();
-        pay.setOrderId(getOrderId());
-        
-        Application.applicationContext.getBean(fooddelivery.external.결제이력Service.class)
-                .결제(pay);
+... 중간생략 ...
 
-        **/
-    }
+Lifting the server siege...
+Transactions:                  55222 hits
+Availability:                 100.00 %
+Elapsed time:                 299.42 secs
+Data transferred:               6.37 MB
+Response time:                  0.05 secs
+Transaction rate:             184.43 trans/sec
+Throughput:                     0.02 MB/sec
+Concurrency:                    9.45
+Successful transactions:           0
+Failed transactions:               0
+Longest transaction:            2.38
+Shortest transaction:           0.00
+
 ```
+
+## 서비스 매쉬 응용 Mesh
+
+Mesh 는 MSA환경에서 네트워크 추적이 어려워지고 있는 가운데 트러블슈팅을 쉽게 도와주는 도구임. Mesh를 이용하면 서비스 간 연결을 관리를 위한 모니터링, 로깅, 추적, 트래픽 제어를 수행할 수 있음.
+
+### istio 쿠버네티스 적용
+
+```
+export ISTIO_VERSION=1.18.1
+curl -L https://istio.io/downloadIstio | ISTIO_VERSION=$ISTIO_VERSION TARGET_ARCH=x86_64 sh -
+export PATH=$PWD/bin:$PATH
+istioctl install --set profile=demo --set hub=gcr.io/istio-release
+```
+
+```
+# default에 istio injection 적용!
+kubectl label namespace tutorial istio-injection=enabled
+```
+
+### 이후 SideCar가 적용된 POD 현황 확인
+
+![finalproject2024-02-22 16 41 12 (3)](https://github.com/grapefr/CloudNativeReport/assets/68136339/611a7650-a4cb-4053-be4e-b580de5df038)
+
+### Kiali 확인
+
+![finalproject2024-02-22 16 41 10 (4)](https://github.com/grapefr/CloudNativeReport/assets/68136339/e084c775-88da-4d96-ad8e-b8adcad4f0f0)
+![finalproject2024-02-22 16 41 11](https://github.com/grapefr/CloudNativeReport/assets/68136339/b2025627-dcdd-4620-9e79-f1dcf65607ae)
+
+### Jaeger 확인
+
+![finalproject2024-02-22 16 41 10 (3)](https://github.com/grapefr/CloudNativeReport/assets/68136339/605feeb1-7cf6-4309-a1c6-32076e6a1fd3)
+
+- [통합 모니터링 Loggregation/Monitoring](통합-모니터링-Loggregation/Monitoring)
+
+## 통합 모니터링 Loggregation/Monitoring
+
+prometheus와 grafana가 istio 설치시 같이 탑재되었음.
+
+### 모니터링 서비스노출
+
+```
+kubectl patch service/prometheus -n istio-system -p '{"spec": {"type": "LoadBalancer"}}'
+```
+
+### prometheus 확인
+
+![finalproject2024-02-22 16 41 10 (2)](https://github.com/grapefr/CloudNativeReport/assets/68136339/df22d203-675f-427d-9606-1966734a992f)
+
+### grafana 확인
+
+![finalproject2024-02-22 16 41 10](https://github.com/grapefr/CloudNativeReport/assets/68136339/5b037525-dd33-4349-8fe6-c01aa5b04e5f)
+
+### Loggregation 적용
+
+```
+# helm 으로 loke stack 설치
+helm install loki-stack grafana/loki-stack --values ./loki-stack-values.yaml -n logging
+```
+
+### Logging 확인
+
+![finalproject2024-02-22 16 41 11 (2)](https://github.com/grapefr/CloudNativeReport/assets/68136339/f189d970-06cb-415c-ad49-598485db4331)
+
+# Final Project 소감
+
+1. 소중한 설계, 개발, 배포 경험
+1. 쿠버네티스는 필수 ( autoscale )
+1. 이벤트스토밍 결과를 코드로 변환해주는 msaez, 생산성
+1. 프로젝트에 해당 업무로 참여하고 싶은 열정
