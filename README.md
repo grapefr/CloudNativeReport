@@ -102,13 +102,13 @@
 
 ```
 # 모델 생성 요청
- http gateway:8080/targets userId=test type=testtype state=request modelRequestId=1
+ http gateway:8080/models userId=test state=request modelName=TestModel10
 
 # 모델 생성 요청 승인
- http PUT gateway:8080/targets id=1
+ http PUT gateway:8080/models id=1
 
 # 타겟추출 요청
-http gateway:8080/targets userId=test type=testtype state=request modelRequestId=1
+ http gateway:8080/targets userId=test type=testtype state=request modelRequestId=1
 # 타겟추출 승인
  http PUT gateway:8080/targets id=1
 
